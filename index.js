@@ -3,11 +3,18 @@ const { Telegraf } = require("telegraf");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const fs = require("fs");
 const cron = require("node-cron");
+const http = require("http");
 const kb = require("./knowledgeBase");
+
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("Coach Godbless bot is running.");
+}).listen(PORT, () => console.log(`Keep-alive server listening on port ${PORT}`));
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const geminiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const geminiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 const OWNER_ID = process.env.OWNER_TELEGRAM_ID;
 
 const DB_FILE = "./leads.json";
