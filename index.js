@@ -1,5 +1,5 @@
 require("dotenv").config();
-const { Telegraf } = require("telegraf");
+const { Telegraf, Markup } = require("telegraf");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const fs = require("fs");
 const cron = require("node-cron");
@@ -136,12 +136,17 @@ bot.on("message", async (ctx) => {
     if (isNew && OWNER_ID) {
       await bot.telegram.sendMessage(
         OWNER_ID,
-        `🆕 New prospect started chatting: ${name} (@${ctx.from.username || "no username"})`
+        `🆕 New prospect started chatting: <a href="tg://user?id=${userId}">${name}</a>`,
+        { parse_mode: "HTML" }
       );
     }
     await ctx.reply(
-      `Hey ${name}! 👋 Welcome — I'm here to help you learn about ${kb.programName} and answer any questions you have.\n\nAlso, come join our community group where students connect and share results: https://t.me/+0YjQKFOMnaY3MTM0\n\nWhat would you like to know? (e.g. what it includes, pricing, or how to get started)`
+      `Hey ${name}! 👋 Welcome — I'm here to help you learn about ${kb.programName} and answer any questions you have.\n\nBefore we continue, join our community group where students connect and share results 👇`,
+      Markup.inlineKeyboard([
+        Markup.button.url("👉 Join the Group First", "https://t.me/+0YjQKFOMnaY3MTM0")
+      ])
     );
+    await ctx.reply(`What would you like to know? (e.g. what it includes, pricing, or how to get started)`);
     return;
   }
 
@@ -161,7 +166,8 @@ bot.on("message", async (ctx) => {
     if (OWNER_ID) {
       await bot.telegram.sendMessage(
         OWNER_ID,
-        `💬 ${name}: ${text}\n🤖 Bot replied: ${reply}`
+        `💬 <a href="tg://user?id=${userId}">${name}</a>: ${text}\n🤖 Bot replied: ${reply}`,
+        { parse_mode: "HTML" }
       );
     }
   } catch (err) {
