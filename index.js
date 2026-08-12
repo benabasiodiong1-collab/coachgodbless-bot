@@ -15,6 +15,8 @@ http.createServer((req, res) => {
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const geminiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+const OWNER_ID = process.env.OWNER_TELEGRAM_ID;
+
 const DB_FILE = "./leads.json";
 
 function loadLeads() {
@@ -129,9 +131,16 @@ bot.on("message", async (ctx) => {
   if (!text) return;
 
   if (text === "/start") {
+    const isNew = lead.stage === "new";
     updateLead(userId, { stage: "engaged" });
+    if (isNew && OWNER_ID) {
+      await bot.telegram.sendMessage(
+        OWNER_ID,
+        `🆕 New prospect started chatting: ${name} (@${ctx.from.username || "no username"})`
+      );
+    }
     await ctx.reply(
-      `Hey ${name}! 👋 Welcome — I'm here to help you learn about ${kb.programName} and answer any questions you have.\n\nWhat would you like to know? (e.g. what it includes, pricing, or how to get started)`
+      `Hey ${name}! 👋 Welcome — I'm here to help you learn about ${kb.programName} and answer any questions you have.\n\nAlso, come join our community group where students connect and share results: https://t.me/+0YjQKFOMnaY3MTM0\n\nWhat would you like to know? (e.g. what it includes, pricing, or how to get started)`
     );
     return;
   }
@@ -139,6 +148,9 @@ bot.on("message", async (ctx) => {
   if (isReadyToPay(text) && lead.stage !== "awaiting_confirmation" && lead.stage !== "closed") {
     updateLead(userId, { stage: "payment_sent" });
     await ctx.reply(`Awesome, ${name}! 🎉 Here's the pricing for your country:\n${kb.pricing}\n${kb.paymentInstructions}`);
+    if (OWNER_ID) {
+      await bot.telegram.sendMessage(OWNER_ID, `💰 ${name} just asked about pricing/payment — sent them the details.`);
+    }
     return;
   }
 
@@ -146,6 +158,12 @@ bot.on("message", async (ctx) => {
     updateLead(userId, { stage: lead.stage === "new" ? "engaged" : lead.stage });
     const reply = await generateReply(text, `This is a private conversation with a prospect named ${name}. Current stage: ${lead.stage}.`);
     await ctx.reply(reply);
+    if (OWNER_ID) {
+      await bot.telegram.sendMessage(
+        OWNER_ID,
+        `💬 ${name}: ${text}\n🤖 Bot replied: ${reply}`
+      );
+    }
   } catch (err) {
     console.error("DM reply error:", err);
     await ctx.reply("Sorry, I had trouble processing that — Coach Godbless will follow up with you shortly!");
