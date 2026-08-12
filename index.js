@@ -53,9 +53,20 @@ function updateLead(userId, updates) {
 
 async function generateReply(userMessage, context) {
   const systemPrompt = `
-You are the assistant for ${kb.coachName}, who runs ${kb.programName}.
-Speak warmly, confidently, and briefly (2-4 sentences max unless explaining pricing or objections).
-Use plain, encouraging language. Never sound robotic or overly formal. Use light emojis, not excessive.
+You are a real member of ${kb.coachName}'s team, helping people with ${kb.programName}. You are NOT an AI and should never say "I'm an AI", "as an assistant", "I'm a bot", or anything revealing you're automated. Talk like a real, experienced human on the team — warm, confident, casual.
+
+HOW YOU SELL (consultative, not pushy):
+- Position yourself as someone here to help them solve a real problem (lack of income, no digital skill, unclear how to start online) — not someone trying to sell a course.
+- Ask what's actually holding them back before pitching. Understand their situation first.
+- Explain affiliate marketing and the program in terms of THEIR outcome (extra income, financial independence, a real skill) — not features.
+- Use social proof naturally (real student wins) when someone doubts it works — never force it into every message.
+- Create gentle urgency around the discounted price being limited, but never pressure or guilt anyone.
+- When someone raises an objection, acknowledge it genuinely first, then address it with facts — never dismiss their concern.
+- Ask soft closing questions naturally ("Does this sound like something that could work for you?" / "What's stopping you from starting today?") instead of hard-selling.
+- Never lie, invent results, or promise guaranteed income — that damages trust and is against what a good closer does long-term.
+
+TONE:
+Speak briefly (2-4 sentences max unless explaining pricing or objections). Natural, conversational, like texting — contractions, casual phrasing. Light emojis, not excessive. Vary your openings, don't sound scripted.
 
 PROGRAM INFO:
 ${kb.programOverview}
@@ -71,7 +82,7 @@ ${kb.testimonials}
 
 Context: ${context}
 
-Do NOT invent information you don't have. If unsure, tell them Coach Godbless will follow up personally.
+Do NOT invent information you don't have. If unsure, say Coach Godbless will personally follow up rather than guessing.
 `;
 
   const fullPrompt = `${systemPrompt}\n\nUser's message: ${userMessage}`;
@@ -117,11 +128,14 @@ bot.on("message", async (ctx) => {
 
   if (ctx.message.photo) {
     updateLead(userId, { stage: "awaiting_confirmation" });
-    await ctx.reply(kb.afterPaymentMessage);
+    await ctx.reply(
+      `Got it, thank you! 🙏 To confirm this quickly, can you reply with:\n1) The exact amount you paid\n2) The date/time you made the payment\n\nOnce I have that, Coach Godbless will verify and complete your registration right away.`
+    );
     if (OWNER_ID) {
       await bot.telegram.sendMessage(
         OWNER_ID,
-        `💰 Payment proof received from ${name} (@${ctx.from.username || "no username"}). Please confirm and complete their registration.`
+        `💰 Payment screenshot received from <a href="tg://user?id=${userId}">${name}</a> (@${ctx.from.username || "no username"}). Waiting on them to confirm exact amount + date — please verify once they reply.`,
+        { parse_mode: "HTML" }
       );
     }
     return;
@@ -130,23 +144,67 @@ bot.on("message", async (ctx) => {
   const text = ctx.message.text;
   if (!text) return;
 
-  if (text === "/start") {
-    const isNew = lead.stage === "new";
-    updateLead(userId, { stage: "engaged" });
-    if (isNew && OWNER_ID) {
+  if (lead.stage === "awaiting_confirmation") {
+    updateLead(userId, { stage: "closed", paymentDetails: text });
+    await ctx.reply(`Perfect, thanks for confirming! ✅ Coach Godbless will verify this shortly and get your registration completed. Welcome to the family — feel free to ask anything in the meantime.`);
+    if (OWNER_ID) {
       await bot.telegram.sendMessage(
         OWNER_ID,
-        `🆕 New prospect started chatting: <a href="tg://user?id=${userId}">${name}</a>`,
+        `✅ <a href="tg://user?id=${userId}">${name}</a> confirmed payment details: "${text}" — please verify against the screenshot and complete their registration.`,
         { parse_mode: "HTML" }
       );
     }
+    return;
+  }
+
+  if (text.startsWith("/start")) {
+    const parts = text.split(" ");
+    const source = parts[1] || "direct";
+    const isNew = lead.stage === "new";
+    updateLead(userId, { stage: "engaged", source });
+    if (isNew && OWNER_ID) {
+      await bot.telegram.sendMessage(
+        OWNER_ID,
+        `🆕 New prospect started chatting (source: ${source}): <a href="tg://user?id=${userId}">${name}</a>`,
+        { parse_mode: "HTML" }
+      );
+    }
+
+    let welcomeText;
+    let openingQuestion = null;
+    if (source === "fbads") {
+      welcomeText = `Hey ${name}! 👋 Thanks for checking us out from Facebook — I'm here to help you learn about ${kb.programName} and how you can start earning with affiliate marketing.`;
+      openingQuestion = "Hello 👋 Coach Godbless can I get More Information on Affiliate Marketing?";
+    } else if (source === "website") {
+      welcomeText = `Hey ${name}! 👋 Great to have you here from our website — I'm here to walk you through ${kb.programName} and answer anything you're curious about.`;
+    } else {
+      welcomeText = `Hey ${name}! 👋 Welcome — I'm here to help you learn about ${kb.programName} and answer any questions you have.`;
+    }
+
     await ctx.reply(
-      `Hey ${name}! 👋 Welcome — I'm here to help you learn about ${kb.programName} and answer any questions you have.\n\nBefore we continue, join our community group where students connect and share results 👇`,
+      `${welcomeText}\n\nBefore we continue, join our community group where students connect and share results 👇`,
       Markup.inlineKeyboard([
         Markup.button.url("👉 Join the Group First", "https://t.me/+0YjQKFOMnaY3MTM0")
       ])
     );
-    await ctx.reply(`What would you like to know? (e.g. what it includes, pricing, or how to get started)`);
+
+    if (openingQuestion) {
+      try {
+        const reply = await generateReply(openingQuestion, `This is a private conversation with a prospect named ${name} who just clicked in from Facebook Ads.`);
+        await ctx.reply(reply);
+        if (OWNER_ID) {
+          await bot.telegram.sendMessage(
+            OWNER_ID,
+            `💬 <a href="tg://user?id=${userId}">${name}</a> (from Facebook Ads): ${openingQuestion}\n🤖 Bot replied: ${reply}`,
+            { parse_mode: "HTML" }
+          );
+        }
+      } catch (err) {
+        console.error("Opening question reply error:", err);
+      }
+    } else {
+      await ctx.reply(`What would you like to know? (e.g. what it includes, pricing, or how to get started)`);
+    }
     return;
   }
 
@@ -176,6 +234,15 @@ bot.on("message", async (ctx) => {
   }
 });
 
+const followUpMessages = [
+  `Hey {name}, just checking in 👋 Did you have any more questions about the program, or are you ready to get started?`,
+  `Hi {name}! Still thinking it over? No pressure — happy to answer anything that's holding you back. 😊`,
+  `Hey {name}, quick one — is there something specific you're unsure about with the program? I'd rather help you decide with real info than let you wonder.`,
+  `Hi {name}, just wanted to check if you're still interested. The discounted price won't be around forever, so let me know if you have questions!`,
+  `Hey {name}, I don't want to be a bother, but I know starting something new can feel like a big decision. What's on your mind?`,
+  `Hi {name}, last check-in from me for now — I'm here whenever you're ready. No rush at all.`
+];
+
 cron.schedule("0 * * * *", async () => {
   const leads = loadLeads();
   const now = Date.now();
@@ -184,14 +251,13 @@ cron.schedule("0 * * * *", async () => {
   for (const [userId, lead] of Object.entries(leads)) {
     const quietFor = now - lead.lastMessageAt;
     const eligibleStage = lead.stage === "engaged" || lead.stage === "payment_sent";
+    const count = lead.followUpCount || 0;
 
-    if (eligibleStage && quietFor > ONE_DAY && !lead.followedUp) {
+    if (eligibleStage && quietFor > ONE_DAY && count < followUpMessages.length) {
       try {
-        await bot.telegram.sendMessage(
-          userId,
-          `Hey ${lead.name}, just checking in 👋 Did you have any more questions about the program, or are you ready to get started?`
-        );
-        updateLead(userId, { followedUp: true });
+        const message = followUpMessages[count].replace("{name}", lead.name);
+        await bot.telegram.sendMessage(userId, message);
+        updateLead(userId, { followUpCount: count + 1, lastMessageAt: Date.now() });
       } catch (err) {
         console.error(`Follow-up failed for ${userId}:`, err.message);
       }
