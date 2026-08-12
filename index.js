@@ -1,206 +1,61 @@
-require("dotenv").config();
-const { Telegraf, Markup } = require("telegraf");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-const fs = require("fs");
-const cron = require("node-cron");
-const http = require("http");
-const kb = require("./knowledgeBase");
+module.exports = {
+  coachName: "Coach Godbless",
+  programName: "Premium Mentorship Program (Affiliate Success Academy Blueprint - ASB)",
 
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("Coach Godbless bot is running.");
-}).listen(PORT, () => console.log(`Keep-alive server listening on port ${PORT}`));
+  pricing: `
+NIGERIA - 15,500 Naira instead of 50,000 Naira
+GHANA - 150 GHC instead of 245 GHC
+CAMEROON - 9,000 XAF instead of 20,000 XAF
+KENYA - 1,500 KSH instead of 3,000 KSH
+UGANDA - 25,000 UGX instead of 50,000 UGX
+`,
 
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const geminiModel = genAI.getGenerativeModel({ model: "gemini-flash-lite-latest" });
-const OWNER_ID = process.env.OWNER_TELEGRAM_ID;
+  paymentInstructions: `
+Here's my account number:
 
-const DB_FILE = "./leads.json";
+Account Number: 7015269313
+Bank: Opay
+Account Name: Godbless Paulinus Ben
 
-function loadLeads() {
-  if (!fs.existsSync(DB_FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
-  } catch {
-    return {};
-  }
-}
-function saveLeads(leads) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(leads, null, 2));
-}
+NOTE: After payment, kindly send a screenshot of your payment proof so I can confirm it and proceed with your registration.
+`,
 
-function getLead(userId, name) {
-  const leads = loadLeads();
-  if (!leads[userId]) {
-    leads[userId] = {
-      name,
-      stage: "new",
-      lastMessageAt: Date.now(),
-      history: []
-    };
-    saveLeads(leads);
-  }
-  return leads[userId];
-}
-function updateLead(userId, updates) {
-  const leads = loadLeads();
-  leads[userId] = { ...leads[userId], ...updates, lastMessageAt: Date.now() };
-  saveLeads(leads);
-  return leads[userId];
-}
+  afterPaymentMessage: `Thank you! I've received your payment proof and Coach Godbless will confirm it shortly and complete your registration. Welcome aboard - while you wait, feel free to ask me any questions about the program.`,
 
-async function generateReply(userMessage, context) {
-  const systemPrompt = `
-You are the assistant for ${kb.coachName}, who runs ${kb.programName}.
-Speak warmly, confidently, and briefly (2-4 sentences max unless explaining pricing or objections).
-Use plain, encouraging language. Never sound robotic or overly formal. Use light emojis, not excessive.
+  readyToPayTriggers: [
+    "i'm ready",
+    "im ready",
+    "how do i pay",
+    "how do i register",
+    "i want to enroll",
+    "i want to register",
+    "send account",
+    "account number",
+    "how to pay",
+    "ready to start",
+    "i'm in",
+    "let's do this",
+    "how much",
+    "what's the price",
+    "i want to make payment",
+    "i want to make the payment",
+    "ready to pay",
+    "i want to pay"
+  ],
 
-PROGRAM INFO:
-${kb.programOverview}
+  objectionGuidance: `
+- "It's too expensive" -> Reframe as an investment: this is a heavily discounted price for a program that teaches a skill that can replace or exceed a monthly salary. Compare the one-time cost to what they'd lose staying stuck. Never pressure, just show value.
+- "Let me think about it" -> Respect their pace, but create gentle urgency: mention the discount is limited, and ask what specifically they're unsure about so you can help them decide with real information, not pressure.
+- "Is this a scam?" -> Be transparent and confident. Mention the community of real students, results, and that Coach Godbless personally mentors people. Never get defensive.
+- "I don't have time" -> Explain the program is self-paced and designed for beginners with full-time jobs or school, with WhatsApp support for flexibility.
+- "I've tried other courses before and failed" -> Acknowledge their experience, then explain what's different: hands-on mentorship, community support, and real accountability, not just video lessons.
+`,
 
-PRICING (only mention if asked, or if user is close to ready):
-${kb.pricing}
+  testimonials: `
+Testimonials to be added later.
+`,
 
-OBJECTION HANDLING GUIDANCE:
-${kb.objectionGuidance}
-
-TESTIMONIALS (use naturally if relevant, don't force them):
-${kb.testimonials}
-
-Context: ${context}
-
-Do NOT invent information you don't have. If unsure, tell them Coach Godbless will follow up personally.
-`;
-
-  const fullPrompt = `${systemPrompt}\n\nUser's message: ${userMessage}`;
-  const result = await geminiModel.generateContent(fullPrompt);
-  const response = result.response;
-  return response.text().trim();
-}
-
-function isReadyToPay(text) {
-  const lower = text.toLowerCase();
-  return kb.readyToPayTriggers.some((trigger) => lower.includes(trigger));
-}
-
-bot.on("message", async (ctx, next) => {
-  const chatType = ctx.chat.type;
-  if (chatType === "group" || chatType === "supergroup") {
-    const text = ctx.message.text;
-    if (!text) return;
-
-    const botUsername = ctx.botInfo.username.toLowerCase();
-    const mentioned = text.toLowerCase().includes("@" + botUsername);
-    const looksLikeQuestion = text.trim().endsWith("?");
-
-    if (!mentioned && !looksLikeQuestion) return;
-
-    try {
-      const reply = await generateReply(text, "This is a message inside the student group. Answer helpfully as a course assistant.");
-      await ctx.reply(reply, { reply_to_message_id: ctx.message.message_id });
-    } catch (err) {
-      console.error("Group reply error:", err);
-    }
-    return;
-  }
-  return next();
-});
-
-bot.on("message", async (ctx) => {
-  if (ctx.chat.type !== "private") return;
-
-  const userId = ctx.from.id;
-  const name = ctx.from.first_name || "there";
-  const lead = getLead(userId, name);
-
-  if (ctx.message.photo) {
-    updateLead(userId, { stage: "awaiting_confirmation" });
-    await ctx.reply(kb.afterPaymentMessage);
-    if (OWNER_ID) {
-      await bot.telegram.sendMessage(
-        OWNER_ID,
-        `💰 Payment proof received from ${name} (@${ctx.from.username || "no username"}). Please confirm and complete their registration.`
-      );
-    }
-    return;
-  }
-
-  const text = ctx.message.text;
-  if (!text) return;
-
-  if (text === "/start") {
-    const isNew = lead.stage === "new";
-    updateLead(userId, { stage: "engaged" });
-    if (isNew && OWNER_ID) {
-      await bot.telegram.sendMessage(
-        OWNER_ID,
-        `🆕 New prospect started chatting: <a href="tg://user?id=${userId}">${name}</a>`,
-        { parse_mode: "HTML" }
-      );
-    }
-    await ctx.reply(
-      `Hey ${name}! 👋 Welcome — I'm here to help you learn about ${kb.programName} and answer any questions you have.\n\nBefore we continue, join our community group where students connect and share results 👇`,
-      Markup.inlineKeyboard([
-        Markup.button.url("👉 Join the Group First", "https://t.me/+0YjQKFOMnaY3MTM0")
-      ])
-    );
-    await ctx.reply(`What would you like to know? (e.g. what it includes, pricing, or how to get started)`);
-    return;
-  }
-
-  if (isReadyToPay(text) && lead.stage !== "awaiting_confirmation" && lead.stage !== "closed") {
-    updateLead(userId, { stage: "payment_sent" });
-    await ctx.reply(`Awesome, ${name}! 🎉 Here's the pricing for your country:\n${kb.pricing}\n${kb.paymentInstructions}`);
-    if (OWNER_ID) {
-      await bot.telegram.sendMessage(OWNER_ID, `💰 ${name} just asked about pricing/payment — sent them the details.`);
-    }
-    return;
-  }
-
-  try {
-    updateLead(userId, { stage: lead.stage === "new" ? "engaged" : lead.stage });
-    const reply = await generateReply(text, `This is a private conversation with a prospect named ${name}. Current stage: ${lead.stage}.`);
-    await ctx.reply(reply);
-    if (OWNER_ID) {
-      await bot.telegram.sendMessage(
-        OWNER_ID,
-        `💬 <a href="tg://user?id=${userId}">${name}</a>: ${text}\n🤖 Bot replied: ${reply}`,
-        { parse_mode: "HTML" }
-      );
-    }
-  } catch (err) {
-    console.error("DM reply error:", err);
-    await ctx.reply("Sorry, I had trouble processing that — Coach Godbless will follow up with you shortly!");
-  }
-});
-
-cron.schedule("0 * * * *", async () => {
-  const leads = loadLeads();
-  const now = Date.now();
-  const ONE_DAY = 24 * 60 * 60 * 1000;
-
-  for (const [userId, lead] of Object.entries(leads)) {
-    const quietFor = now - lead.lastMessageAt;
-    const eligibleStage = lead.stage === "engaged" || lead.stage === "payment_sent";
-
-    if (eligibleStage && quietFor > ONE_DAY && !lead.followedUp) {
-      try {
-        await bot.telegram.sendMessage(
-          userId,
-          `Hey ${lead.name}, just checking in 👋 Did you have any more questions about the program, or are you ready to get started?`
-        );
-        updateLead(userId, { followedUp: true });
-      } catch (err) {
-        console.error(`Follow-up failed for ${userId}:`, err.message);
-      }
-    }
-  }
-});
-
-bot.launch();
-console.log("Coach Godbless bot is running...");
-
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+  programOverview: `
+The Affiliate Success Academy Blueprint (ASB) is Coach Godbless's flagship program teaching affiliate marketing as a high-income digital skill, from beginner basics to running profitable campaigns. It includes structured lessons, mentorship, and an active WhatsApp community for support and accountability.
+`
+};
