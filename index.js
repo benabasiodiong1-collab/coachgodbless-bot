@@ -51,19 +51,31 @@ function updateLead(userId, updates) {
   return leads[userId];
 }
 
-async function generateReply(userMessage, context) {
+function appendHistory(userId, role, text) {
+  const leads = loadLeads();
+  const lead = leads[userId];
+  if (!lead) return;
+  const history = lead.history || [];
+  history.push({ role, text });
+  leads[userId].history = history.slice(-10);
+  saveLeads(leads);
+}
+
+async function generateReply(userMessage, context, history = []) {
   const systemPrompt = `
 You are a real member of ${kb.coachName}'s team, helping people with ${kb.programName}. You are NOT an AI and should never say "I'm an AI", "as an assistant", "I'm a bot", or anything revealing you're automated. Talk like a real, experienced human on the team — warm, confident, casual.
 
 HOW YOU SELL (consultative, not pushy):
+- Look at the conversation history below. If you've ALREADY asked a discovery/goal question earlier in this conversation, DO NOT ask another similar one — move forward with real information, pricing, or next steps instead.
+- Ask AT MOST one discovery question total in the whole conversation (e.g. what's holding them back, or their experience level) — after that, stop asking and start explaining, guiding, and helping them move toward a decision.
 - Position yourself as someone here to help them solve a real problem (lack of income, no digital skill, unclear how to start online) — not someone trying to sell a course.
-- Ask what's actually holding them back before pitching. Understand their situation first.
 - Explain affiliate marketing and the program in terms of THEIR outcome (extra income, financial independence, a real skill) — not features.
 - Use social proof naturally (real student wins) when someone doubts it works — never force it into every message.
 - Create gentle urgency around the discounted price being limited, but never pressure or guilt anyone.
 - When someone raises an objection, acknowledge it genuinely first, then address it with facts — never dismiss their concern.
-- Ask soft closing questions naturally ("Does this sound like something that could work for you?" / "What's stopping you from starting today?") instead of hard-selling.
-- Never lie, invent results, or promise guaranteed income — that damages trust and is against what a good closer does long-term.
+- Ask soft closing questions naturally when appropriate ("Does this sound like something that could work for you?") instead of hard-selling.
+- Never lie, invent results, or promise guaranteed income.
+- If someone says something like "how do I get started" or "I want to learn" — that is your cue to explain concretely what the program includes and the next step, not to ask another discovery question.
 
 TONE:
 Speak briefly (2-4 sentences max unless explaining pricing or objections). Natural, conversational, like texting — contractions, casual phrasing. Light emojis, not excessive. Vary your openings, don't sound scripted.
@@ -81,6 +93,9 @@ TESTIMONIALS (use naturally if relevant, don't force them):
 ${kb.testimonials}
 
 Context: ${context}
+
+CONVERSATION SO FAR (most recent last):
+${history.map(h => `${h.role === "user" ? "Prospect" : "You"}: ${h.text}`).join("\n") || "(this is the first message)"}
 
 Do NOT invent information you don't have. If unsure, say Coach Godbless will personally follow up rather than guessing.
 `;
@@ -192,6 +207,8 @@ bot.on("message", async (ctx) => {
       try {
         const reply = await generateReply(openingQuestion, `This is a private conversation with a prospect named ${name} who just clicked in from Facebook Ads.`);
         await ctx.reply(reply);
+        appendHistory(userId, "user", openingQuestion);
+        appendHistory(userId, "bot", reply);
         if (OWNER_ID) {
           await bot.telegram.sendMessage(
             OWNER_ID,
@@ -219,8 +236,10 @@ bot.on("message", async (ctx) => {
 
   try {
     updateLead(userId, { stage: lead.stage === "new" ? "engaged" : lead.stage });
-    const reply = await generateReply(text, `This is a private conversation with a prospect named ${name}. Current stage: ${lead.stage}.`);
+    const reply = await generateReply(text, `This is a private conversation with a prospect named ${name}. Current stage: ${lead.stage}.`, lead.history || []);
     await ctx.reply(reply);
+    appendHistory(userId, "user", text);
+    appendHistory(userId, "bot", reply);
     if (OWNER_ID) {
       await bot.telegram.sendMessage(
         OWNER_ID,
