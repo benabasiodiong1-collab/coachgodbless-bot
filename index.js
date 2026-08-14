@@ -27,12 +27,14 @@ function loadLeads() {
     return {};
   }
 }
+
 function saveLeads(leads) {
   fs.writeFileSync(DB_FILE, JSON.stringify(leads, null, 2));
 }
 
 function getLead(userId, name) {
   const leads = loadLeads();
+
   if (!leads[userId]) {
     leads[userId] = {
       name,
@@ -40,24 +42,42 @@ function getLead(userId, name) {
       lastMessageAt: Date.now(),
       history: []
     };
+
     saveLeads(leads);
   }
+
   return leads[userId];
 }
+
 function updateLead(userId, updates) {
   const leads = loadLeads();
-  leads[userId] = { ...leads[userId], ...updates, lastMessageAt: Date.now() };
+
+  leads[userId] = {
+    ...leads[userId],
+    ...updates,
+    lastMessageAt: Date.now()
+  };
+
   saveLeads(leads);
+
   return leads[userId];
 }
 
 function appendHistory(userId, role, text) {
   const leads = loadLeads();
   const lead = leads[userId];
+
   if (!lead) return;
+
   const history = lead.history || [];
-  history.push({ role, text });
+
+  history.push({
+    role,
+    text
+  });
+
   leads[userId].history = history.slice(-10);
+
   saveLeads(leads);
 }
 
@@ -81,6 +101,7 @@ RULES:
 - When someone raises an objection, understand it first (ask what specifically concerns them if unclear) before responding — never argue or dismiss.
 - When closing, ROTATE your approach naturally instead of reusing the same closing line — vary between direct ("want me to show you how to register?"), choice ("want the registration link, or should I explain the payment process first?"), goal-based (reference their stated goal), summary (recap what they've told you), soft ("what would you need to know to feel comfortable starting?"), or commitment-based ("are you ready to stay consistent with this?").
 - If asked the price, answer directly and honestly using only the real pricing below — never hide it.
+- If someone wants to register or pay, let them know there are two simple options: instant self-registration via the Selar link, or a direct bank transfer — the bot will send the exact details when they say they're ready.
 - Personalize using what you know from the conversation history — their name, goal, challenge, objections, anything they've shared. Reference it naturally rather than treating every message as a blank slate.
 - Avoid clichés like "wow that's amazing", "life-changing opportunity", "you don't want to miss this" — sound like a real person, not hype copy.
 
@@ -108,20 +129,27 @@ Do NOT invent information you don't have. If unsure, say Coach Godbless will per
 `;
 
   const fullPrompt = `${systemPrompt}\n\nUser's message: ${userMessage}`;
+
   const result = await geminiModel.generateContent(fullPrompt);
   const response = result.response;
+
   return response.text().trim();
 }
 
 function isReadyToPay(text) {
   const lower = text.toLowerCase();
-  return kb.readyToPayTriggers.some((trigger) => lower.includes(trigger));
+
+  return kb.readyToPayTriggers.some((trigger) =>
+    lower.includes(trigger)
+  );
 }
 
 bot.on("message", async (ctx, next) => {
   const chatType = ctx.chat.type;
+
   if (chatType === "group" || chatType === "supergroup") {
     const text = ctx.message.text;
+
     if (!text) return;
 
     const botUsername = ctx.botInfo.username.toLowerCase();
@@ -131,13 +159,21 @@ bot.on("message", async (ctx, next) => {
     if (!mentioned && !looksLikeQuestion) return;
 
     try {
-      const reply = await generateReply(text, "This is a message inside the student group. Answer helpfully as a course assistant.");
-      await ctx.reply(reply, { reply_to_message_id: ctx.message.message_id });
+      const reply = await generateReply(
+        text,
+        "This is a message inside the student group. Answer helpfully as a course assistant."
+      );
+
+      await ctx.reply(reply, {
+        reply_to_message_id: ctx.message.message_id
+      });
     } catch (err) {
       console.error("Group reply error:", err);
     }
+
     return;
   }
+
   return next();
 });
 
@@ -149,33 +185,51 @@ bot.on("message", async (ctx) => {
   const lead = getLead(userId, name);
 
   if (ctx.message.photo) {
-    updateLead(userId, { stage: "awaiting_confirmation" });
+    updateLead(userId, {
+      stage: "awaiting_confirmation"
+    });
+
     await ctx.reply(
       `Got it, thank you! 🙏 To confirm this quickly, can you reply with:\n1) The exact amount you paid\n2) The date/time you made the payment\n\nOnce I have that, Coach Godbless will verify and complete your registration right away.`
     );
+
     if (OWNER_ID) {
       await bot.telegram.sendMessage(
         OWNER_ID,
         `💰 Payment screenshot received from <a href="tg://user?id=${userId}">${name}</a> (@${ctx.from.username || "no username"}). Waiting on them to confirm exact amount + date — please verify once they reply.`,
-        { parse_mode: "HTML" }
+        {
+          parse_mode: "HTML"
+        }
       );
     }
+
     return;
   }
 
   const text = ctx.message.text;
+
   if (!text) return;
 
   if (lead.stage === "awaiting_confirmation") {
-    updateLead(userId, { stage: "closed", paymentDetails: text });
-    await ctx.reply(`Perfect, thanks for confirming! ✅ Coach Godbless will verify this shortly and get your registration completed. Welcome to the family — feel free to ask anything in the meantime.`);
+    updateLead(userId, {
+      stage: "closed",
+      paymentDetails: text
+    });
+
+    await ctx.reply(
+      `Perfect, thanks for confirming! ✅ Coach Godbless will verify this shortly and get your registration completed. Welcome to the family — feel free to ask anything in the meantime.`
+    );
+
     if (OWNER_ID) {
       await bot.telegram.sendMessage(
         OWNER_ID,
         `✅ <a href="tg://user?id=${userId}">${name}</a> confirmed payment details: "${text}" — please verify against the screenshot and complete their registration.`,
-        { parse_mode: "HTML" }
+        {
+          parse_mode: "HTML"
+        }
       );
     }
+
     return;
   }
 
@@ -183,23 +237,35 @@ bot.on("message", async (ctx) => {
     const parts = text.split(" ");
     const source = parts[1] || "direct";
     const isNew = lead.stage === "new";
-    updateLead(userId, { stage: "engaged", source });
+
+    updateLead(userId, {
+      stage: "engaged",
+      source
+    });
+
     if (isNew && OWNER_ID) {
       await bot.telegram.sendMessage(
         OWNER_ID,
         `🆕 New prospect started chatting (source: ${source}): <a href="tg://user?id=${userId}">${name}</a>`,
-        { parse_mode: "HTML" }
+        {
+          parse_mode: "HTML"
+        }
       );
     }
 
     let welcomeText;
     let openingQuestion = null;
+
     if (source === "fbads") {
       welcomeText = `Hey ${name}! 👋 Thanks for checking us out from Facebook — I'm here to help you learn about ${kb.programName} and how you can start earning with affiliate marketing.`;
-      openingQuestion = "Hello 👋 Coach Godbless can I get More Information on Affiliate Marketing?";
+
+      openingQuestion =
+        "Hello 👋 Coach Godbless can I get More Information on Affiliate Marketing?";
     } else if (source === "website") {
       welcomeText = `Hey ${name}! 👋 Great to have you here from our website — I'm here to walk you through ${kb.programName} and answer anything you're curious about.`;
-      openingQuestion = "Hello, I'd like to know more about this program and how it can help me.";
+
+      openingQuestion =
+        "Hello, I'd like to know more about this program and how it can help me.";
     } else {
       welcomeText = `Hey ${name}! 👋 Welcome — I'm here to help you learn about ${kb.programName} and answer any questions you have.`;
     }
@@ -207,57 +273,113 @@ bot.on("message", async (ctx) => {
     await ctx.reply(
       `${welcomeText}\n\nBefore we continue, join our community group where students connect and share results 👇`,
       Markup.inlineKeyboard([
-        Markup.button.url("👉 Join the Group First", "https://t.me/+0YjQKFOMnaY3MTM0")
+        Markup.button.url(
+          "👉 Join the Group First",
+          "https://t.me/+0YjQKFOMnaY3MTM0"
+        )
       ])
     );
 
     if (openingQuestion) {
       try {
-        const reply = await generateReply(openingQuestion, `This is a private conversation with a prospect named ${name} who just clicked in from ${source === "fbads" ? "a Facebook Ad" : "the website"}. Do NOT ask a discovery question here — go straight into explaining what affiliate marketing is and how ${kb.programName} helps them start, in a warm, exciting way. End with a soft next-step question like whether they'd like to know pricing or how to begin.`);
+        const reply = await generateReply(
+          openingQuestion,
+          `This is a private conversation with a prospect named ${name} who just clicked in from ${source === "fbads" ? "a Facebook Ad" : "the website"}. Do NOT ask a discovery question here — go straight into explaining what affiliate marketing is and how ${kb.programName} helps them start, in a warm, exciting way. End with a soft next-step question like whether they'd like to know pricing or how to begin.`
+        );
+
         await ctx.reply(reply);
+
         appendHistory(userId, "user", openingQuestion);
         appendHistory(userId, "bot", reply);
+
         if (OWNER_ID) {
           await bot.telegram.sendMessage(
             OWNER_ID,
             `💬 <a href="tg://user?id=${userId}">${name}</a> (from ${source}): ${openingQuestion}\n🤖 Bot replied: ${reply}`,
-            { parse_mode: "HTML" }
+            {
+              parse_mode: "HTML"
+            }
           );
         }
       } catch (err) {
         console.error("Opening question reply error:", err);
       }
     } else {
-      await ctx.reply(`What would you like to know? (e.g. what it includes, pricing, or how to get started)`);
+      await ctx.reply(
+        `What would you like to know? (e.g. what it includes, pricing, or how to get started)`
+      );
     }
+
     return;
   }
 
-  if (isReadyToPay(text) && lead.stage !== "awaiting_confirmation" && lead.stage !== "closed") {
-    updateLead(userId, { stage: "payment_sent" });
-    await ctx.reply(`Awesome, ${name}! 🎉 Here's the pricing for your country:\n${kb.pricing}\n${kb.paymentInstructions}`);
+  if (
+    isReadyToPay(text) &&
+    lead.stage !== "awaiting_confirmation" &&
+    lead.stage !== "closed"
+  ) {
+    updateLead(userId, {
+      stage: "payment_sent"
+    });
+
+    await ctx.reply(
+      `Awesome, ${name}! 🎉 Here's the pricing for your country:\n${kb.pricing}`
+    );
+
+    await ctx.reply(
+      `You've got two ways to get registered — pick whichever's easier for you 👇`,
+      Markup.inlineKeyboard([
+        Markup.button.url(
+          "✅ Pay & Register via Selar (Instant)",
+          kb.selarLink
+        )
+      ])
+    );
+
+    await ctx.reply(kb.selarSteps);
+    await ctx.reply(kb.paymentInstructions);
+
     if (OWNER_ID) {
-      await bot.telegram.sendMessage(OWNER_ID, `💰 ${name} just asked about pricing/payment — sent them the details.`);
+      await bot.telegram.sendMessage(
+        OWNER_ID,
+        `💰 ${name} just asked about pricing/payment — sent them both options.`
+      );
     }
+
     return;
   }
 
   try {
-    updateLead(userId, { stage: lead.stage === "new" ? "engaged" : lead.stage });
-    const reply = await generateReply(text, `This is a private conversation with a prospect named ${name}. Current stage: ${lead.stage}.`, lead.history || []);
+    updateLead(userId, {
+      stage: lead.stage === "new" ? "engaged" : lead.stage
+    });
+
+    const reply = await generateReply(
+      text,
+      `This is a private conversation with a prospect named ${name}. Current stage: ${lead.stage}.`,
+      lead.history || []
+    );
+
     await ctx.reply(reply);
+
     appendHistory(userId, "user", text);
     appendHistory(userId, "bot", reply);
+
     if (OWNER_ID) {
       await bot.telegram.sendMessage(
         OWNER_ID,
         `💬 <a href="tg://user?id=${userId}">${name}</a>: ${text}\n🤖 Bot replied: ${reply}`,
-        { parse_mode: "HTML" }
+        {
+          parse_mode: "HTML"
+        }
       );
     }
   } catch (err) {
     console.error("DM reply error:", err);
-    await ctx.reply("Sorry, I had trouble processing that — Coach Godbless will follow up with you shortly!");
+
+    await ctx.reply(
+      "Sorry, I had trouble processing that — Coach Godbless will follow up with you shortly!"
+    );
   }
 });
 
@@ -277,22 +399,40 @@ cron.schedule("0 * * * *", async () => {
 
   for (const [userId, lead] of Object.entries(leads)) {
     const quietFor = now - lead.lastMessageAt;
-    const eligibleStage = lead.stage === "engaged" || lead.stage === "payment_sent";
+    const eligibleStage =
+      lead.stage === "engaged" || lead.stage === "payment_sent";
+
     const count = lead.followUpCount || 0;
 
-    if (eligibleStage && quietFor > ONE_DAY && count < followUpMessages.length) {
+    if (
+      eligibleStage &&
+      quietFor > ONE_DAY &&
+      count < followUpMessages.length
+    ) {
       try {
-        const message = followUpMessages[count].replace("{name}", lead.name);
+        const message = followUpMessages[count].replace(
+          "{name}",
+          lead.name
+        );
+
         await bot.telegram.sendMessage(userId, message);
-        updateLead(userId, { followUpCount: count + 1, lastMessageAt: Date.now() });
+
+        updateLead(userId, {
+          followUpCount: count + 1,
+          lastMessageAt: Date.now()
+        });
       } catch (err) {
-        console.error(`Follow-up failed for ${userId}:`, err.message);
+        console.error(
+          `Follow-up failed for ${userId}:`,
+          err.message
+        );
       }
     }
   }
 });
 
 bot.launch();
+
 console.log("Coach Godbless bot is running...");
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
