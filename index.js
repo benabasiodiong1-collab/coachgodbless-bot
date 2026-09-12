@@ -51,7 +51,6 @@ Fill in your details correctly (full name and email address)
 Scroll down to payment method - pay via transfer or card, whichever you prefer
 You'll get an instant email from Selar confirming payment - screenshot that and send it to me
 `,
-
   paymentInstructions: `
 Option 2 - Direct bank transfer
 
