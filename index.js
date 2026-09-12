@@ -1,5 +1,4 @@
 require("dotenv").config();
-
 const { Telegraf, Markup } = require("telegraf");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const fs = require("fs");
@@ -7,1386 +6,309 @@ const cron = require("node-cron");
 const http = require("http");
 const kb = require("./knowledgeBase");
 
-// ============================================================
-// BASIC SETUP
-// ============================================================
-
 const PORT = process.env.PORT || 3000;
-
 http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
   res.end("Coach Godbless bot is running.");
-}).listen(PORT, () => {
-  console.log(`Keep-alive server listening on port ${PORT}`);
-});
+}).listen(PORT, () => console.log(`Keep-alive server listening on port ${PORT}`));
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-const geminiModel = genAI.getGenerativeModel({
-  model: "gemini-flash-lite-latest"
-});
-
+const geminiModel = genAI.getGenerativeModel({ model: "gemini-flash-lite-latest" });
 const OWNER_ID = process.env.OWNER_TELEGRAM_ID;
 
 const DB_FILE = "./leads.json";
 
-// ============================================================
-// PAYMENT INFORMATION
-// ============================================================
-
-const SELAR_LINK = "https://selar.com/1j8799";
-
-const PAYMENT_DETAILS = `
-MAKE PAYMENT HERE
-
-⤵️⤵️⤵️⤵️⤵️⤵️
-
-📮 Account Number: 7015269313
-🏦 Bank: Opay
-👤 Account Name: Godbless Paulinus Ben
-
-NOTE: After payment, kindly send a screenshot for payment proof so I can confirm your payment.
-
-Once done, let me know so I can proceed with your registration.
-`;
-
-// ============================================================
-// DATABASE
-// ============================================================
-
 function loadLeads() {
-  if (!fs.existsSync(DB_FILE)) {
-    return {};
-  }
-
+  if (!fs.existsSync(DB_FILE)) return {};
   try {
     return JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
-  } catch (error) {
-    console.error("Database read error:", error);
+  } catch {
     return {};
   }
 }
-
 function saveLeads(leads) {
-  try {
-    fs.writeFileSync(
-      DB_FILE,
-      JSON.stringify(leads, null, 2)
-    );
-  } catch (error) {
-    console.error("Database save error:", error);
-  }
+  fs.writeFileSync(DB_FILE, JSON.stringify(leads, null, 2));
 }
 
 function getLead(userId, name) {
   const leads = loadLeads();
-
   if (!leads[userId]) {
     leads[userId] = {
       name,
       stage: "new",
-      source: "direct",
-      goal: null,
-      experience: null,
-      challenge: null,
-      interest: null,
-      objection: null,
-      followUpCount: 0,
       lastMessageAt: Date.now(),
       history: []
     };
-
     saveLeads(leads);
   }
-
   return leads[userId];
 }
-
 function updateLead(userId, updates) {
   const leads = loadLeads();
-
-  if (!leads[userId]) {
-    leads[userId] = {
-      name: "there",
-      stage: "new",
-      history: []
-    };
-  }
-
-  leads[userId] = {
-    ...leads[userId],
-    ...updates,
-    lastMessageAt: Date.now()
-  };
-
+  leads[userId] = { ...leads[userId], ...updates, lastMessageAt: Date.now() };
   saveLeads(leads);
-
   return leads[userId];
 }
 
 function appendHistory(userId, role, text) {
   const leads = loadLeads();
-
-  if (!leads[userId]) return;
-
-  const history = leads[userId].history || [];
-
-  history.push({
-    role,
-    text,
-    timestamp: Date.now()
-  });
-
-  // Keep the most recent 12 messages
-  leads[userId].history = history.slice(-12);
-
+  const lead = leads[userId];
+  if (!lead) return;
+  const history = lead.history || [];
+  history.push({ role, text });
+  leads[userId].history = history.slice(-10);
   saveLeads(leads);
 }
 
-// ============================================================
-// TEXT HELPERS
-// ============================================================
+async function generateReply(userMessage, context, history = []) {
+  const systemPrompt = `
+You are the official assistant for ${kb.coachName} and ${kb.programName}. Present yourself clearly as the official assistant — never claim to literally BE Coach Godbless, and never say "I'm an AI" or "as an assistant" in a way that sounds robotic. Just talk like a real, warm, knowledgeable human on the team.
 
-function normalize(text) {
-  return String(text || "")
-    .toLowerCase()
-    .trim();
-}
+CORE OBJECTIVE:
+Your job is NOT to force a sale. It's to understand the prospect, identify their real problem, educate them, build trust, and guide genuinely interested people toward the mentorship as the right next step — while being honest with people who aren't a fit yet.
 
-function containsAny(text, phrases) {
-  const lower = normalize(text);
+FLEXIBLE FRAMEWORK (use naturally, skip stages that don't apply, never follow a fixed script):
+PROBLEM → GOAL → UNDERSTANDING → EDUCATION → TRUST → SOLUTION → OBJECTION HANDLING → CLOSE → FOLLOW-UP
 
-  return phrases.some(phrase =>
-    lower.includes(phrase)
-  );
-}
+RULES:
+- Look at the conversation history below. NEVER repeat a question, phrase, opening, or explanation you've already used earlier in this conversation. Every reply should feel fresh, not scripted.
+- Ask only ONE question at a time, and only when it's genuinely useful — never stack multiple questions in one message.
+- Don't sell immediately. Understand their situation, goal, or challenge first when it's early in the conversation. Once you already know their situation (check history), move forward — don't re-ask.
+- Educate before pitching: explain what affiliate marketing is, how it works, or what's involved when relevant — don't make every message about buying.
+- Never guarantee income or promise they'll "get rich" — be honest that results depend on learning, consistency, and effort.
+- Never invent testimonials, numbers, discounts, deadlines, or scarcity beyond what's explicitly provided below.
+- When someone raises an objection, understand it first (ask what specifically concerns them if unclear) before responding — never argue or dismiss.
+- When closing, ROTATE your approach naturally instead of reusing the same closing line — vary between direct ("want me to show you how to register?"), choice ("want the registration link, or should I explain the payment process first?"), goal-based (reference their stated goal), summary (recap what they've told you), soft ("what would you need to know to feel comfortable starting?"), or commitment-based ("are you ready to stay consistent with this?").
+- If asked the price, answer directly and honestly using only the real pricing below — never hide it.
+- If someone wants to register or pay, let them know there are two simple options: instant self-registration via the Selar link, or a direct bank transfer — the bot will send the exact details when they say they're ready.
+- If the prospect says something like "I'm done watching" or "finished the video" (referring to the free webinar), ask them ONE simple question to confirm they actually paid attention — e.g. "What was the one thing that stood out to you most from the video?" If their answer shows they didn't watch it or is completely unrelated, gently say you only continue with people who are serious and ask them to actually watch it first. If their answer makes sense, continue normally and compliment their takeaway briefly.
+- Personalize using what you know from the conversation history — their name, goal, challenge, objections, anything they've shared. Reference it naturally rather than treating every message as a blank slate.
+- Avoid clichés like "wow that's amazing", "life-changing opportunity", "you don't want to miss this" — sound like a real person, not hype copy.
 
-// ============================================================
-// INTENT DETECTION
-// ============================================================
+TONE:
+Short, natural, conversational — like texting a helpful person, not reading a script. 2-4 sentences typically, more only when explaining pricing/details. Light emojis, not excessive.
 
-function isPaymentIntent(text) {
-  return containsAny(text, [
-    "i want to pay",
-    "i want to make payment",
-    "i want to make the payment",
-    "ready to pay",
-    "ready to register",
-    "ready to start",
-    "i'm ready",
-    "im ready",
-    "i am ready",
-    "i'm in",
-    "im in",
-    "let's do this",
-    "lets do this",
-    "send account",
-    "account number",
-    "bank details",
-    "bank account",
-    "payment details",
-    "how do i pay",
-    "where do i pay",
-    "payment link",
-    "registration link",
-    "send the link",
-    "send link",
-    "i want to register",
-    "i want to enroll",
-    "how can i register"
-  ]);
-}
-
-function isPriceQuestion(text) {
-  return containsAny(text, [
-    "how much",
-    "what is the price",
-    "what's the price",
-    "whats the price",
-    "price",
-    "cost",
-    "fee",
-    "how much is it",
-    "registration fee"
-  ]);
-}
-
-function isSelarRequest(text) {
-  return containsAny(text, [
-    "selar link",
-    "selar",
-    "registration link",
-    "payment link",
-    "send the link",
-    "send link"
-  ]);
-}
-
-function isAccountRequest(text) {
-  return containsAny(text, [
-    "account number",
-    "bank details",
-    "bank account",
-    "opay",
-    "account details",
-    "transfer",
-    "make payment"
-  ]);
-}
-
-function isObjection(text) {
-  return containsAny(text, [
-    "too expensive",
-    "expensive",
-    "can't afford",
-    "cannot afford",
-    "i don't have money",
-    "no money",
-    "let me think",
-    "let me think about it",
-    "i need to think",
-    "is this a scam",
-    "scam",
-    "is it legit",
-    "not sure",
-    "i'm scared",
-    "i am scared",
-    "don't have time",
-    "do not have time",
-    "no time",
-    "i've tried",
-    "i have tried",
-    "tried before",
-    "does it work"
-  ]);
-}
-
-// ============================================================
-// SEND OWNER NOTIFICATION
-// ============================================================
-
-async function notifyOwner(message) {
-  if (!OWNER_ID) return;
-
-  try {
-    await bot.telegram.sendMessage(
-      OWNER_ID,
-      message,
-      { parse_mode: "HTML" }
-    );
-  } catch (error) {
-    console.error("Owner notification error:", error.message);
-  }
-}
-
-// ============================================================
-// GENERATE SMART GEMINI REPLY
-// ============================================================
-
-async function generateSmartReply(
-  userMessage,
-  lead,
-  extraContext = ""
-) {
-  const historyText =
-    (lead.history || [])
-      .map(item =>
-        `${item.role === "user" ? "Prospect" : "Assistant"}: ${item.text}`
-      )
-      .join("\n") || "(No previous conversation)";
-
-  const prompt = `
-You are the official sales and education assistant for:
-
-Coach Godbless
-${kb.programName}
-
-You are part of Coach Godbless's team.
-
-IMPORTANT IDENTITY RULE:
-Never claim that you literally are Coach Godbless.
-Do not say "I am an AI".
-Speak naturally as a helpful member of Coach Godbless's team.
-
-==================================================
-YOUR MAIN JOB
-==================================================
-
-Your job is to help prospects understand affiliate marketing and the Affiliate Success Academy before they decide whether they want to join.
-
-You are NOT a pushy salesperson.
-
-Your job is:
-
-1. Understand the prospect.
-2. Discover their goal when useful.
-3. Understand their experience level.
-4. Educate them.
-5. Explain how affiliate marketing works.
-6. Explain how the program can help.
-7. Build trust using ONLY the information provided.
-8. Handle genuine objections.
-9. Identify serious buying intent.
-10. Guide serious prospects toward registration.
-
-Never pressure someone into buying.
-
-==================================================
-CONVERSATION STRATEGY
-==================================================
-
-Use this naturally:
-
-WELCOME
-↓
-UNDERSTAND
-↓
-EDUCATE
-↓
-BUILD TRUST
-↓
-SHOW SOLUTION
-↓
-HANDLE OBJECTION
-↓
-QUALIFY
-↓
-CLOSE
-
-Do NOT force every stage.
-
-If the prospect already gave you their goal, DO NOT ask for it again.
-
-If they already told you they are a beginner, DO NOT ask whether they are a beginner again.
-
-Use their previous answers.
-
-==================================================
-VERY IMPORTANT
-==================================================
-
-Ask only ONE question at a time.
-
-Do not ask:
-
-"What is your goal, have you tried affiliate marketing before, and how much do you want to earn?"
-
-Instead ask one useful question.
-
-Example:
-
-"What made you interested in affiliate marketing in the first place?"
-
-Then wait for their answer.
-
-==================================================
-EDUCATION
-==================================================
-
-When someone asks what affiliate marketing is:
-
-Explain simply:
-
-Affiliate marketing is a performance-based digital business model where someone promotes a product/service using a unique referral link and earns a commission when a qualifying sale happens.
-
-Do not promise guaranteed income.
-
-Explain that results depend on:
-
-- learning
-- strategy
-- consistency
-- traffic
-- communication
-- execution
-
-==================================================
-PROGRAM
-==================================================
-
-Program information:
-
+PROGRAM INFO:
 ${kb.programOverview}
 
-Pricing:
-
+PRICING (only mention if asked, or if user is clearly close to ready):
 ${kb.pricing}
 
-Testimonials:
-
-${kb.testimonials}
-
-Objection guidance:
-
+OBJECTION HANDLING GUIDANCE:
 ${kb.objectionGuidance}
 
-==================================================
-PROSPECT INFORMATION
-==================================================
+REAL TESTIMONIALS (use naturally when trust-building is relevant, never force them, never invent additional ones):
+${kb.testimonials}
 
-Name:
-${lead.name || "Prospect"}
+Context: ${context}
 
-Current stage:
-${lead.stage || "new"}
+CONVERSATION SO FAR (most recent last):
+${history.map(h => `${h.role === "user" ? "Prospect" : "You"}: ${h.text}`).join("\n") || "(this is the first message)"}
 
-Source:
-${lead.source || "direct"}
-
-Goal:
-${lead.goal || "Unknown"}
-
-Experience:
-${lead.experience || "Unknown"}
-
-Challenge:
-${lead.challenge || "Unknown"}
-
-Interest:
-${lead.interest || "Unknown"}
-
-Objection:
-${lead.objection || "None"}
-
-==================================================
-CURRENT CONTEXT
-==================================================
-
-${extraContext}
-
-==================================================
-CONVERSATION HISTORY
-==================================================
-
-${historyText}
-
-==================================================
-REPLY STYLE
-==================================================
-
-Keep replies natural.
-
-Usually 2-5 sentences.
-
-Use simple language.
-
-Light emojis are okay.
-
-Do not sound like an advertisement.
-
-Do not repeatedly say:
-
-"Wow!"
-"That's amazing!"
-"Life-changing!"
-"You don't want to miss this!"
-
-Avoid fake hype.
-
-Never invent:
-
-- testimonials
-- earnings
-- student numbers
-- discounts
-- deadlines
-- scarcity
-- guarantees
-
-==================================================
-PRICE
-==================================================
-
-If the prospect asks the price, answer directly.
-
-Do not hide the price.
-
-Use only the pricing supplied in the knowledge base.
-
-==================================================
-PAYMENT
-==================================================
-
-If the prospect is clearly ready to register/pay, the system will handle the payment details separately.
-
-Do not invent payment information.
-
-==================================================
-CLOSING
-==================================================
-
-When someone is clearly interested, use a natural close.
-
-Examples:
-
-"Would you like me to show you how to register?"
-
-"Would you prefer the Selar registration option or direct transfer?"
-
-"Do you feel ready to take the next step?"
-
-Do not use the same closing sentence every time.
-
-==================================================
-FINAL RULE
-==================================================
-
-Answer the prospect's actual question first.
-
-Do not force them into another topic.
-
-User message:
-
-${userMessage}
+Do NOT invent information you don't have. If unsure, say Coach Godbless will personally follow up rather than guessing.
 `;
 
-  try {
-    const result =
-      await geminiModel.generateContent(prompt);
-
-    return result.response.text().trim();
-  } catch (error) {
-    console.error("Gemini error:", error);
-
-    return "I understand. Let me help you with that. What would you like to know first?";
-  }
+  const fullPrompt = `${systemPrompt}\n\nUser's message: ${userMessage}`;
+  const result = await geminiModel.generateContent(fullPrompt);
+  const response = result.response;
+  return response.text().trim();
 }
 
-// ============================================================
-// SMART LEAD STAGE UPDATE
-// ============================================================
-
-function determineStage(text, currentStage) {
-  if (isPaymentIntent(text)) {
-    return "payment_intent";
-  }
-
-  if (isObjection(text)) {
-    return "objection";
-  }
-
-  if (isPriceQuestion(text)) {
-    return "pricing";
-  }
-
-  if (currentStage === "new") {
-    return "engaged";
-  }
-
-  return currentStage || "engaged";
+function isReadyToPay(text) {
+  const lower = text.toLowerCase();
+  return kb.readyToPayTriggers.some((trigger) => lower.includes(trigger));
 }
-
-// ============================================================
-// PAYMENT FLOW
-// ============================================================
-
-async function sendPaymentOptions(ctx, name) {
-  await ctx.reply(
-    `Perfect, ${name}! 🎉
-
-You're ready for the next step.
-
-Here are the registration options:`
-  );
-
-  // SELAR
-  await ctx.reply(
-    `✅ OPTION 1 — REGISTER VIA SELAR
-
-You can register instantly here:
-
-👉 https://selar.com/1j8799
-
-You can also use the button below 👇`,
-    Markup.inlineKeyboard([
-      Markup.button.url(
-        "✅ Register & Pay via Selar",
-        SELAR_LINK
-      )
-    ])
-  );
-
-  await ctx.reply(
-    `After completing your Selar payment, kindly send your payment screenshot here so it can be confirmed.`
-  );
-
-  // DIRECT PAYMENT
-  await ctx.reply(
-    `OPTION 2 — DIRECT BANK TRANSFER 👇
-
-*MAKE PAYMENT HERE*
-
-⤵️⤵️⤵️⤵️⤵️⤵️
-
-📮 Account Number: *7015269313*
-🏦 Bank: *Opay*
-👤 Account Name: *Godbless Paulinus Ben*
-
-*NOTE:* After payment kindly send a screenshot for payment proof so I can confirm your payment.
-
-*Once done, let me know so I can proceed with your registration.*`,
-    {
-      parse_mode: "Markdown"
-    }
-  );
-
-  await notifyOwner(
-    `💰 <b>PAYMENT INTENT</b>
-
-👤 <a href="tg://user?id=${ctx.from.id}">${name}</a>
-
-The prospect has reached the payment stage.
-
-✅ Selar link sent
-✅ Direct Opay details sent`
-  );
-}
-
-// ============================================================
-// GROUP HANDLER
-// ============================================================
 
 bot.on("message", async (ctx, next) => {
   const chatType = ctx.chat.type;
+  if (chatType === "group" || chatType === "supergroup") {
+    const text = ctx.message.text;
+    if (!text) return;
 
-  if (
-    chatType !== "group" &&
-    chatType !== "supergroup"
-  ) {
-    return next();
-  }
+    const botUsername = ctx.botInfo.username.toLowerCase();
+    const mentioned = text.toLowerCase().includes("@" + botUsername);
+    const looksLikeQuestion = text.trim().endsWith("?");
 
-  const text = ctx.message.text;
+    if (!mentioned && !looksLikeQuestion) return;
 
-  if (!text) return;
-
-  const botUsername =
-    ctx.botInfo.username.toLowerCase();
-
-  const mentioned =
-    text.toLowerCase()
-      .includes("@" + botUsername);
-
-  const looksLikeQuestion =
-    text.trim().endsWith("?");
-
-  if (!mentioned && !looksLikeQuestion) {
+    try {
+      const reply = await generateReply(text, "This is a message inside the student group. Answer helpfully as a course assistant.");
+      await ctx.reply(reply, { reply_to_message_id: ctx.message.message_id });
+    } catch (err) {
+      console.error("Group reply error:", err);
+    }
     return;
   }
-
-  try {
-    const temporaryLead = {
-      name: ctx.from.first_name || "Student",
-      stage: "group",
-      source: "student_group",
-      history: []
-    };
-
-    const reply = await generateSmartReply(
-      text,
-      temporaryLead,
-      "This is a question inside Coach Godbless's student community. Give a useful educational answer. Do not aggressively sell."
-    );
-
-    await ctx.reply(reply, {
-      reply_to_message_id:
-        ctx.message.message_id
-    });
-
-  } catch (error) {
-    console.error(
-      "Group reply error:",
-      error
-    );
-  }
+  return next();
 });
 
-// ============================================================
-// PRIVATE CHAT
-// ============================================================
-
-bot.on("message", async ctx => {
-  if (ctx.chat.type !== "private") {
-    return;
-  }
+bot.on("message", async (ctx) => {
+  if (ctx.chat.type !== "private") return;
 
   const userId = ctx.from.id;
-  const name =
-    ctx.from.first_name || "there";
-
-  let lead = getLead(userId, name);
-
-  // ==========================================================
-  // PAYMENT SCREENSHOT
-  // ==========================================================
+  const name = ctx.from.first_name || "there";
+  const lead = getLead(userId, name);
 
   if (ctx.message.photo) {
-
-    updateLead(userId, {
-      stage: "awaiting_confirmation"
-    });
-
+    updateLead(userId, { stage: "awaiting_confirmation" });
     await ctx.reply(
-      `Got it, thank you! 🙏
-
-I've received your payment screenshot.
-
-Please reply with:
-
-1️⃣ The exact amount you paid
-2️⃣ The date/time you made the payment
-
-Coach Godbless will verify it and complete your registration. ✅`
+      `Got it, thank you! 🙏 To confirm this quickly, can you reply with:\n1) The exact amount you paid\n2) The date/time you made the payment\n\nOnce I have that, Coach Godbless will verify and complete your registration right away.`
     );
-
-    await notifyOwner(
-      `💰 <b>PAYMENT SCREENSHOT RECEIVED</b>
-
-👤 <a href="tg://user?id=${userId}">${name}</a>
-
-A payment screenshot has been received.
-
-Waiting for amount + date/time confirmation.`
-    );
-
+    if (OWNER_ID) {
+      await bot.telegram.sendMessage(
+        OWNER_ID,
+        `💰 Payment screenshot received from <a href="tg://user?id=${userId}">${name}</a> (@${ctx.from.username || "no username"}). Waiting on them to confirm exact amount + date — please verify once they reply.`,
+        { parse_mode: "HTML" }
+      );
+    }
     return;
   }
 
   const text = ctx.message.text;
+  if (!text) return;
 
-  if (!text) {
+  if (lead.stage === "awaiting_confirmation") {
+    updateLead(userId, { stage: "closed", paymentDetails: text });
+    await ctx.reply(`Perfect, thanks for confirming! ✅ Coach Godbless will verify this shortly and get your registration completed. Welcome to the family — feel free to ask anything in the meantime.`);
+    if (OWNER_ID) {
+      await bot.telegram.sendMessage(
+        OWNER_ID,
+        `✅ <a href="tg://user?id=${userId}">${name}</a> confirmed payment details: "${text}" — please verify against the screenshot and complete their registration.`,
+        { parse_mode: "HTML" }
+      );
+    }
     return;
   }
-
-  // ==========================================================
-  // PAYMENT CONFIRMATION
-  // ==========================================================
-
-  if (
-    lead.stage === "awaiting_confirmation"
-  ) {
-
-    updateLead(userId, {
-      stage: "closed",
-      paymentDetails: text
-    });
-
-    await ctx.reply(
-      `Perfect, thank you! ✅
-
-Your payment information has been received.
-
-Coach Godbless will verify the payment and complete your registration.
-
-Welcome to the family! 🎉`
-    );
-
-    await notifyOwner(
-      `✅ <b>PAYMENT DETAILS CONFIRMED</b>
-
-👤 <a href="tg://user?id=${userId}">${name}</a>
-
-Details provided:
-
-<code>${text}</code>
-
-Please verify the payment screenshot and complete registration.`
-    );
-
-    return;
-  }
-
-  // ==========================================================
-  // START COMMAND
-  // ==========================================================
 
   if (text.startsWith("/start")) {
-
-    const parts =
-      text.split(" ");
-
-    const source =
-      parts[1] || "direct";
-
-    const isNew =
-      lead.stage === "new";
-
-    updateLead(userId, {
-      stage: "engaged",
-      source
-    });
-
-    lead = getLead(userId, name);
-
-    if (isNew) {
-      await notifyOwner(
-        `🆕 <b>NEW PROSPECT</b>
-
-👤 <a href="tg://user?id=${userId}">${name}</a>
-
-📍 Source: ${source}`
+    const parts = text.split(" ");
+    const source = parts[1] || "direct";
+    const isNew = lead.stage === "new";
+    updateLead(userId, { stage: "engaged", source });
+    if (isNew && OWNER_ID) {
+      await bot.telegram.sendMessage(
+        OWNER_ID,
+        `🆕 New prospect started chatting (source: ${source}): <a href="tg://user?id=${userId}">${name}</a>`,
+        { parse_mode: "HTML" }
       );
     }
 
     let welcomeText;
-
+    let openingQuestion = null;
     if (source === "fbads") {
-
-      welcomeText =
-        `Hey ${name}! 👋
-
-Thanks for coming from Facebook.
-
-You're in the right place if you want to understand affiliate marketing and learn how to build it as a digital skill.
-
-I'll help you understand how it works and answer your questions before you decide whether it's right for you.`;
-
-    } else if (source === "tiktok") {
-
-      welcomeText =
-        `Hey ${name}! 👋
-
-Welcome from TikTok.
-
-I'll help you understand affiliate marketing, how the business works, and what you'll need to get started.
-
-Feel free to ask me anything.`;
-
+      welcomeText = `Hey ${name}! 👋 Thanks for checking us out from Facebook — I'm here to help you learn about ${kb.programName} and how you can start earning with affiliate marketing.`;
+      openingQuestion = "Hello 👋 Coach Godbless can I get More Information on Affiliate Marketing?";
     } else if (source === "website") {
-
-      welcomeText =
-        `Hey ${name}! 👋
-
-Welcome.
-
-I'll walk you through affiliate marketing, the Affiliate Success Academy, what you'll learn, and how to get started.`;
-
+      welcomeText = `Hey ${name}! 👋 Great to have you here from our website — I'm here to walk you through ${kb.programName} and answer anything you're curious about.`;
+      openingQuestion = "Hello, I'd like to know more about this program and how it can help me.";
     } else {
-
-      welcomeText =
-        `Hey ${name}! 👋
-
-Welcome to Coach Godbless's official program assistant.
-
-I'll help you understand affiliate marketing, the program, pricing, and how to get started.`;
+      welcomeText = `Hey ${name}! 👋 Welcome — I'm here to help you learn about ${kb.programName} and answer any questions you have.`;
     }
 
     await ctx.reply(
-      welcomeText
-    );
-
-    await ctx.reply(
-      `Before we get into everything, you can also join our student community here 👇`,
+      `${welcomeText}\n\nBefore we continue, join our community group where students connect and share results 👇`,
       Markup.inlineKeyboard([
-        Markup.button.url(
-          "👉 Join Student Community",
-          "https://t.me/+0YjQKFOMnaY3MTM0"
-        )
+        Markup.button.url("👉 Join the Group First", "https://t.me/+0YjQKFOMnaY3MTM0")
       ])
     );
 
-    // Ask ONE discovery question
-    await ctx.reply(
-      `To point you in the right direction, what made you interested in affiliate marketing?`
-    );
+    if (isNew) {
+      await ctx.reply(kb.vslMessage);
+      updateLead(userId, { vslSent: true });
+    }
 
-    appendHistory(
-      userId,
-      "bot",
-      welcomeText
-    );
-
-    appendHistory(
-      userId,
-      "bot",
-      "To point you in the right direction, what made you interested in affiliate marketing?"
-    );
-
-    return;
-  }
-
-  // ==========================================================
-  // DIRECT SELAR REQUEST
-  // ==========================================================
-
-  if (
-    isSelarRequest(text) &&
-    !isAccountRequest(text)
-  ) {
-
-    updateLead(userId, {
-      stage: "payment_intent",
-      interest: "Selar registration"
-    });
-
-    await ctx.reply(
-      `Absolutely 👍🏽
-
-Here's the official registration link:
-
-👉 https://selar.com/1j8799`,
-      Markup.inlineKeyboard([
-        Markup.button.url(
-          "✅ Register via Selar",
-          SELAR_LINK
-        )
-      ])
-    );
-
-    await ctx.reply(
-      `Once you've completed your payment, kindly send your payment screenshot here so it can be confirmed.`
-    );
-
-    await notifyOwner(
-      `🔗 <b>SELAR LINK REQUEST</b>
-
-👤 <a href="tg://user?id=${userId}">${name}</a>
-
-The prospect requested the Selar registration link.`
-    );
-
-    appendHistory(
-      userId,
-      "user",
-      text
-    );
-
-    return;
-  }
-
-  // ==========================================================
-  // DIRECT ACCOUNT REQUEST
-  // ==========================================================
-
-  if (
-    isAccountRequest(text)
-  ) {
-
-    updateLead(userId, {
-      stage: "payment_intent",
-      interest: "Direct transfer"
-    });
-
-    await ctx.reply(
-      PAYMENT_DETAILS,
-      {
-        parse_mode: "Markdown"
+    if (openingQuestion) {
+      try {
+        const reply = await generateReply(openingQuestion, `This is a private conversation with a prospect named ${name} who just clicked in from ${source === "fbads" ? "a Facebook Ad" : "the website"}. Do NOT ask a discovery question here — go straight into explaining what affiliate marketing is and how ${kb.programName} helps them start, in a warm, exciting way. End with a soft next-step question like whether they'd like to know pricing or how to begin.`);
+        await ctx.reply(reply);
+        appendHistory(userId, "user", openingQuestion);
+        appendHistory(userId, "bot", reply);
+        if (OWNER_ID) {
+          await bot.telegram.sendMessage(
+            OWNER_ID,
+            `💬 <a href="tg://user?id=${userId}">${name}</a> (from ${source}): ${openingQuestion}\n🤖 Bot replied: ${reply}`,
+            { parse_mode: "HTML" }
+          );
+        }
+      } catch (err) {
+        console.error("Opening question reply error:", err);
       }
-    );
-
-    await notifyOwner(
-      `🏦 <b>DIRECT PAYMENT REQUEST</b>
-
-👤 <a href="tg://user?id=${userId}">${name}</a>
-
-Direct payment details were requested and sent.`
-    );
-
-    appendHistory(
-      userId,
-      "user",
-      text
-    );
-
+    } else {
+      await ctx.reply(`What would you like to know? (e.g. what it includes, pricing, or how to get started)`);
+    }
     return;
   }
 
-  // ==========================================================
-  // PAYMENT INTENT
-  // ==========================================================
-
-  if (
-    isPaymentIntent(text) &&
-    lead.stage !== "awaiting_confirmation" &&
-    lead.stage !== "closed"
-  ) {
-
-    updateLead(userId, {
-      stage: "payment_intent"
-    });
-
+  if (isReadyToPay(text) && lead.stage !== "awaiting_confirmation" && lead.stage !== "closed") {
+    updateLead(userId, { stage: "payment_sent" });
+    await ctx.reply(`Awesome, ${name}! 🎉 Here's the pricing for your country:\n${kb.pricing}`);
     await ctx.reply(
-      `That's good to hear, ${name}! 🙌
-
-Let me give you the registration options so you can choose whichever is easier for you.`
+      `You've got two ways to get registered — pick whichever's easier for you 👇`,
+      Markup.inlineKeyboard([
+        Markup.button.url("✅ Pay & Register via Selar (Instant)", kb.selarLink)
+      ])
     );
-
-    await ctx.reply(
-      `Current pricing for the available countries:
-
-${kb.pricing}`
-    );
-
-    await sendPaymentOptions(
-      ctx,
-      name
-    );
-
-    appendHistory(
-      userId,
-      "user",
-      text
-    );
-
+    await ctx.reply(kb.selarSteps);
+    await ctx.reply(kb.paymentInstructions);
+    if (OWNER_ID) {
+      await bot.telegram.sendMessage(OWNER_ID, `💰 ${name} just asked about pricing/payment — sent them both options.`);
+    }
     return;
   }
-
-  // ==========================================================
-  // PRICE QUESTION
-  // ==========================================================
-
-  if (isPriceQuestion(text)) {
-
-    updateLead(userId, {
-      stage: "pricing"
-    });
-
-    await ctx.reply(
-      `Sure 👍🏽 Here is the current pricing:
-
-${kb.pricing}
-
-The program is designed to teach affiliate marketing from the basics and provide mentorship/support as you learn.`
-    );
-
-    await ctx.reply(
-      `If you'd like, I can also explain exactly what you'll learn inside the program before you decide.`
-    );
-
-    appendHistory(
-      userId,
-      "user",
-      text
-    );
-
-    return;
-  }
-
-  // ==========================================================
-  // OBJECTION
-  // ==========================================================
-
-  if (isObjection(text)) {
-
-    updateLead(userId, {
-      stage: "objection",
-      objection: text
-    });
-
-    const reply =
-      await generateSmartReply(
-        text,
-        lead,
-        `The prospect has raised an objection.
-
-Do not argue with them.
-
-Acknowledge their concern first.
-
-Give a clear, honest response using only the available program information.
-
-Do not pressure them.
-
-If their objection is unclear, ask ONE question to understand it.`
-      );
-
-    await ctx.reply(reply);
-
-    appendHistory(
-      userId,
-      "user",
-      text
-    );
-
-    appendHistory(
-      userId,
-      "bot",
-      reply
-    );
-
-    return;
-  }
-
-  // ==========================================================
-  // NORMAL SMART CONVERSATION
-  // ==========================================================
 
   try {
-
-    const previousHistory =
-      lead.history || [];
-
-    const newStage =
-      determineStage(
-        text,
-        lead.stage
-      );
-
-    updateLead(userId, {
-      stage: newStage
-    });
-
-    // Basic profile extraction
-    const lower = normalize(text);
-
-    if (
-      containsAny(lower, [
-        "beginner",
-        "new to affiliate",
-        "never done affiliate",
-        "don't know anything",
-        "dont know anything"
-      ])
-    ) {
-      updateLead(userId, {
-        experience: "beginner"
-      });
-    }
-
-    if (
-      containsAny(lower, [
-        "already doing affiliate",
-        "i do affiliate",
-        "i've done affiliate",
-        "i have done affiliate",
-        "experienced"
-      ])
-    ) {
-      updateLead(userId, {
-        experience: "some experience"
-      });
-    }
-
-    const freshLead =
-      getLead(userId, name);
-
-    const reply =
-      await generateSmartReply(
-        text,
-        freshLead,
-        `This is a private conversation.
-
-The prospect is currently at stage: ${freshLead.stage}.
-
-Continue the conversation naturally.
-
-Remember:
-- Answer their actual question first.
-- Use information already provided.
-- Do not repeat previous questions.
-- Ask only ONE useful question if needed.
-- Educate before selling.
-- If they become clearly ready to buy, guide them toward registration.
-- Do not invent payment details.`
-      );
-
+    updateLead(userId, { stage: lead.stage === "new" ? "engaged" : lead.stage });
+    const reply = await generateReply(text, `This is a private conversation with a prospect named ${name}. Current stage: ${lead.stage}.`, lead.history || []);
     await ctx.reply(reply);
-
-    appendHistory(
-      userId,
-      "user",
-      text
-    );
-
-    appendHistory(
-      userId,
-      "bot",
-      reply
-    );
-
-    // Notify owner only for meaningful high-intent stages
-    if (
-      ["pricing", "objection", "payment_intent"]
-        .includes(freshLead.stage)
-    ) {
-      await notifyOwner(
-        `📊 <b>LEAD UPDATE</b>
-
-👤 <a href="tg://user?id=${userId}">${name}</a>
-
-📍 Stage: ${freshLead.stage}
-
-💬 Prospect:
-${text}
-
-🤖 Bot:
-${reply}`
+    appendHistory(userId, "user", text);
+    appendHistory(userId, "bot", reply);
+    if (OWNER_ID) {
+      await bot.telegram.sendMessage(
+        OWNER_ID,
+        `💬 <a href="tg://user?id=${userId}">${name}</a>: ${text}\n🤖 Bot replied: ${reply}`,
+        { parse_mode: "HTML" }
       );
     }
-
-  } catch (error) {
-
-    console.error(
-      "DM reply error:",
-      error
-    );
-
-    await ctx.reply(
-      `I understand. Let me help you with that. You can ask me anything about the program or affiliate marketing.`
-    );
+  } catch (err) {
+    console.error("DM reply error:", err);
+    await ctx.reply("Sorry, I had trouble processing that — Coach Godbless will follow up with you shortly!");
   }
 });
 
-// ============================================================
-// SMART FOLLOW-UP SYSTEM
-// ============================================================
-
 const followUpMessages = [
-  {
-    stage: "engaged",
-    message:
-      `Hey {name} 👋 Just checking in. If you're still curious about affiliate marketing, you can ask me anything you're unsure about.`
-  },
-
-  {
-    stage: "engaged",
-    message:
-      `Hi {name} 😊 I wanted to check whether you still want to understand how the affiliate business works. I'm here if you have any questions.`
-  },
-
-  {
-    stage: "pricing",
-    message:
-      `Hey {name} 👋 Just checking in. If there's anything about the program or pricing you're still unsure about, feel free to ask.`
-  },
-
-  {
-    stage: "objection",
-    message:
-      `Hi {name}. No pressure at all — if there's a particular concern holding you back, you can tell me and I'll help you understand it clearly.`
-  },
-
-  {
-    stage: "payment_intent",
-    message:
-      `Hey {name} 👋 Just checking in. If you're still ready to continue with registration, let me know and I'll guide you through the next step.`
-  },
-
-  {
-    stage: "payment_intent",
-    message:
-      `Hi {name} 😊 Whenever you're ready to complete your registration, just message me and I'll help you with the payment/registration process.`
-  }
+  `Hey {name} 👋 Just checking in — were you able to go through everything we talked about?`,
+  `Hi {name}, still thinking things over? Happy to answer anything that's still unclear.`,
+  `{name}, based on what you shared earlier, are you still looking to move forward with that goal?`,
+  `Just checking on you, {name} — if you're still interested, I'm here for any questions.`,
+  `Hey {name}, no pressure at all. If something specific is holding you back, let me know and I'll help however I can.`,
+  `I don't want to keep disturbing you, {name}. Whenever you're ready to continue, just message me and I'll help with the next step.`
 ];
 
-// Run every hour
-cron.schedule(
-  "0 * * * *",
-  async () => {
+cron.schedule("0 * * * *", async () => {
+  const leads = loadLeads();
+  const now = Date.now();
+  const ONE_DAY = 24 * 60 * 60 * 1000;
 
-    const leads =
-      loadLeads();
+  for (const [userId, lead] of Object.entries(leads)) {
+    const quietFor = now - lead.lastMessageAt;
+    const eligibleStage = lead.stage === "engaged" || lead.stage === "payment_sent";
+    const count = lead.followUpCount || 0;
 
-    const now =
-      Date.now();
-
-    const ONE_DAY =
-      24 * 60 * 60 * 1000;
-
-    for (
-      const [userId, lead]
-      of Object.entries(leads)
-    ) {
-
-      const quietFor =
-        now - (
-          lead.lastMessageAt || now
-        );
-
-      if (
-        quietFor <= ONE_DAY
-      ) {
-        continue;
-      }
-
-      if (
-        lead.stage === "closed" ||
-        lead.stage === "awaiting_confirmation"
-      ) {
-        continue;
-      }
-
-      const count =
-        lead.followUpCount || 0;
-
-      if (
-        count >= followUpMessages.length
-      ) {
-        continue;
-      }
-
+    if (eligibleStage && quietFor > ONE_DAY && count < followUpMessages.length) {
       try {
-
-        const available =
-          followUpMessages.filter(
-            item =>
-              item.stage === lead.stage
-          );
-
-        const fallback =
-          followUpMessages[count];
-
-        const selected =
-          available[0] || fallback;
-
-        const message =
-          selected.message.replace(
-            "{name}",
-            lead.name || "there"
-          );
-
-        await bot.telegram.sendMessage(
-          userId,
-          message
-        );
-
-        updateLead(userId, {
-          followUpCount:
-            count + 1,
-          lastMessageAt:
-            Date.now()
-        });
-
-      } catch (error) {
-
-        console.error(
-          `Follow-up failed for ${userId}:`,
-          error.message
-        );
+        const message = followUpMessages[count].replace("{name}", lead.name);
+        await bot.telegram.sendMessage(userId, message);
+        updateLead(userId, { followUpCount: count + 1, lastMessageAt: Date.now() });
+      } catch (err) {
+        console.error(`Follow-up failed for ${userId}:`, err.message);
       }
     }
   }
-);
-
-// ============================================================
-// BOT START
-// ============================================================
-
-bot.catch((error, ctx) => {
-  console.error(
-    `Bot error for ${ctx.updateType}:`,
-    error
-  );
 });
 
 bot.launch();
+console.log("Coach Godbless bot is running...");
 
-console.log(
-  "🚀 Coach Godbless Smart Sales Bot is running..."
-);
-
-// ============================================================
-// SHUTDOWN
-// ============================================================
-
-process.once(
-  "SIGINT",
-  () => bot.stop("SIGINT")
-);
-
-process.once(
-  "SIGTERM",
-  () => bot.stop("SIGTERM")
-);
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
